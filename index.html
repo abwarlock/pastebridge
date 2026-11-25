@@ -161,16 +161,16 @@ function render(){
 }
 $('chips').onclick=e=>{const id=e.target.dataset.id;if(!id)return;target=id;render()};
 function reset(){wipeAll();const p=peer;peer=null;try{p&&p.destroy()}catch(e){}conns={};hostConn=null;members=[];isHost=false;target='all';inc={};view('s0')}
-function fail(e){const t=e&&e.type;toast(t==='peer-unavailable'?'Room not found. Check the code.':(t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed')?'Can’t reach the connection service':'Connection error'+(t?': '+t:''));reset()}
+function fail(e){const t=e&&e.type;toast(t==='peer-unavailable'?'Room not found. Check code, and host must keep app open.':(t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed')?'Can’t reach the connection service':'Connection error'+(t?': '+t:''));reset()}
 
 // ---- host ----
 function startHost(tries){
   if(typeof Peer==='undefined')return toast('Could not load connection library');
   room=mkCode();isHost=true;const p=peer=new Peer(PID(room));
-  p.on('open',id=>{if(peer!==p)return;myId=id;members=[{id,name:myName,host:true}];view('room');render();toast('Room created ✓')});
+  p.on('open',id=>{if(peer!==p)return;myId=id;members=[{id,name:myName,host:true}];view('room');render();keepAwake();toast('Room created ✓')});
   p.on('error',e=>{if(peer!==p)return;if(e.type==='unavailable-id'&&(tries||0)<5){peer=null;try{p.destroy()}catch(x){}startHost((tries||0)+1)}else fail(e)});
   p.on('connection',c=>{c.on('data',d=>hostIn(c,d));c.on('close',()=>drop(c.peer));c.on('error',()=>drop(c.peer))});
-  p.on('disconnected',()=>{try{p.reconnect()}catch(e){}});
+  p.on('disconnected',()=>{const t=setInterval(()=>{if(peer!==p||p.destroyed||!p.disconnected){clearInterval(t);return}try{p.reconnect()}catch(e){}},3000)});
 }
 function hostIn(c,d){
   if(d.t==='hello'){conns[c.peer]=c;members=members.filter(m=>m.id!==c.peer);const n=String(d.name||'Device').slice(0,20);members.push({id:c.peer,name:n});bcast();render();toast(n+' joined');return}
@@ -183,8 +183,10 @@ function route(d){
   else if(d.to===myId)onMsg(d);
   else if(conns[d.to]&&conns[d.to].open)conns[d.to].send(d);
 }
+let wl=null;async function keepAwake(){try{if(isHost&&'wakeLock' in navigator)wl=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&isHost&&peer){if(peer.disconnected&&!peer.destroyed){try{peer.reconnect()}catch(e){}}keepAwake()}});
 // ---- member ----
-function join(code){
+function join(code,tries){tries=tries||0;
   if(typeof Peer==='undefined')return toast('Could not load connection library');
   room=code;isHost=false;members=[];const p=peer=new Peer();
   p.on('open',id=>{if(peer!==p)return;myId=id;const c=hostConn=p.connect(PID(room),{reliable:true});
@@ -193,8 +195,8 @@ function join(code){
     c.on('close',()=>{if(peer!==p)return;toast('Host ended the room');reset()});
     c.on('error',()=>{});
   });
-  p.on('error',e=>{if(peer===p)fail(e)});
-  setTimeout(()=>{if(peer===p&&!members.length){toast('Room not found. Check the code.');reset()}},12000);
+  p.on('error',e=>{if(peer!==p)return;if(e.type==='peer-unavailable'&&tries<2){peer=null;try{p.destroy()}catch(x){}toast('Retrying…');setTimeout(()=>{if(!peer)join(code,tries+1)},2000);return}fail(e)});
+  setTimeout(()=>{if(peer===p&&!members.length){toast('Could not reach host. Host must keep app open.');reset()}},20000);
 }
 // ---- UI wiring ----
 $('nm').value=ls.get('pb-name')||guess();
